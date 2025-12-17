@@ -1,0 +1,14 @@
+Epoch 01 | train loss 0.6001 acc 0.714 spikes 103065.6 | val loss 0.5596 acc 0.747 f1 0.823 spikes 107443.5
+Epoch 02 | train loss 0.5339 acc 0.803 spikes 110957.2 | val loss 0.5237 acc 0.834 f1 0.874 spikes 107853.5
+Epoch 03 | train loss 0.5200 acc 0.814 spikes 106829.7 | val loss 0.5202 acc 0.828 f1 0.865 spikes 107902.0
+Epoch 04 | train loss 0.5158 acc 0.831 spikes 105146.8 | val loss 0.5093 acc 0.857 f1 0.888 spikes 109933.2
+Epoch 05 | train loss 0.5083 acc 0.833 spikes 107127.2 | val loss 0.5038 acc 0.833 f1 0.863 spikes 105253.4
+Epoch 06 | train loss 0.5012 acc 0.843 spikes 104551.4 | val loss 0.5084 acc 0.828 f1 0.864 spikes 99766.4
+Epoch 07 | train loss 0.4957 acc 0.853 spikes 103144.3 | val loss 0.4909 acc 0.860 f1 0.892 spikes 106185.0
+Epoch 08 | train loss 0.4981 acc 0.846 spikes 103168.8 | val loss 0.4958 acc 0.844 f1 0.878 spikes 101143.7
+Epoch 09 | train loss 0.4871 acc 0.857 spikes 101948.1 | val loss 0.4844 acc 0.864 f1 0.894 spikes 104517.4
+Epoch 10 | train loss 0.4849 acc 0.865 spikes 107945.2 | val loss 0.4813 acc 0.862 f1 0.889 spikes 107763.8
+
+TEST | loss 0.4719 acc 0.881 f1 0.909 spikes 105056.5
+
+Process finished with exit code 0
