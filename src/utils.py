@@ -55,3 +55,28 @@ def compute_binary_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, 
         "recall": float(recall),
         "f1": float(f1),
     }
+
+def plot_aco_convergence():
+    import json
+    import os
+    import matplotlib.pyplot as plt
+
+    with open("runs/aco_search.json", "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    hist = data["history"]
+    iters = [h["iter"] for h in hist]
+    best_fit = [h["best_fitness"] for h in hist]
+    global_best = [h["global_best_fitness"] for h in hist]
+
+    os.makedirs("results", exist_ok=True)
+    plt.figure()
+    plt.plot(iters, best_fit, label="Best in iteration")
+    plt.plot(iters, global_best, label="Global best")
+    plt.xlabel("ACO iteration")
+    plt.ylabel("Fitness (val_f1 - λ*spikes)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("results/aco_convergence.png", dpi=200)
+    print("Saved results/aco_convergence.png")
+
