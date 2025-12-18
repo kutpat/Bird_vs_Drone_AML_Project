@@ -7,6 +7,17 @@ from typing import Dict, Tuple, Optional
 import torch
 import numpy as np
 
+from sklearn.metrics import accuracy_score, f1_score
+
+@torch.no_grad()
+def compute_classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+    acc = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred, average="binary")  # 2-class
+    return {"accuracy": float(acc), "f1": float(f1)}
+
+@torch.no_grad()
+def to_numpy(x: torch.Tensor) -> np.ndarray:
+    return x.detach().cpu().numpy()
 
 def set_seed(seed: int = 42, deterministic: bool = False) -> None:
     """Set seeds for reproducibility."""
