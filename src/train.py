@@ -36,6 +36,7 @@ def train_one_epoch(
     T: int,
     device: torch.device,
     lambda_spikes: float = 0.0,
+    max_batches: int | None = None,
 ) -> Dict[str, float]:
     model.train()
 
@@ -44,9 +45,11 @@ def train_one_epoch(
     total_samples = 0
     total_spikes = 0.0
 
-    for x, y in loader:
-        x, y = x.to(device), y.to(device)
+    for batch_idx, (x, y) in enumerate(loader):
+        if max_batches is not None and batch_idx >= max_batches:
+            break
 
+        x, y = x.to(device), y.to(device)
         x_spk = encode_rate(x, T=T)
 
         optimizer.zero_grad()
@@ -79,6 +82,7 @@ def evaluate(
     criterion: nn.Module,
     T: int,
     device: torch.device,
+    max_batches: int | None = None,
 ) -> Dict[str, float]:
     model.eval()
 
@@ -89,7 +93,10 @@ def evaluate(
     all_y = []
     all_pred = []
 
-    for x, y in loader:
+    for batch_idx, (x, y) in enumerate(loader):
+        if max_batches is not None and batch_idx >= max_batches:
+            break
+
         x, y = x.to(device), y.to(device)
         x_spk = encode_rate(x, T=T)
 
@@ -109,11 +116,10 @@ def evaluate(
     y_pred = torch.cat(all_pred, dim=0).numpy()
 
     m = compute_binary_metrics(y_true, y_pred)
+
     return {
         "loss": total_loss / max(1, total_samples),
         "accuracy": m["accuracy"],
-        "precision": m["precision"],
-        "recall": m["recall"],
         "f1": m["f1"],
         "avg_spikes_per_sample": (total_spikes / max(1, total_samples)),
     }
