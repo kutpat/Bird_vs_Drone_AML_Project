@@ -1,0 +1,9 @@
+torch~=2.8.0
+typing~=3.7.4.3
+torchvision~=0.23.0
+snntorch~=0.9.4
+numpy~=1.26.4
+scikit-learn~=1.6.1
+matplotlib~=3.9.4
+pillow~=11.3.0
+streamlit
