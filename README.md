@@ -1,5 +1,7 @@
 # SNN + Ant Colony Optimization (ACO) — Bird vs Drone Classifier
 
+GitHub Repository Link: https://github.com/kutpat/Bird_vs_Drone_AML_Project
+
 This project implements a **Spiking Neural Network (SNN)** for **bird vs drone** image classification and a hybrid approach where **Ant Colony Optimization (ACO)** tunes key SNN hyperparameters.  
 A bonus **Streamlit app** provides an interactive demo for uploading images and getting predictions.
 
