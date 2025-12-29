@@ -1,4 +1,9 @@
 # main.py
+
+# - baseline: train/eval baseline SNN
+# - aco: run Ant Colony Optimization to find good hyperparameters quickly
+# - hybrid: retrain best ACO configuration fully + test
+# - report: generate plots/tables for the written report
 import argparse
 import torch
 import torch.nn as nn
@@ -31,9 +36,9 @@ def run_baseline():
     snn_cfg = SNNConfig(
         num_classes=len(class_names),
         image_size=data_cfg.image_size,
-        T=20,
-        beta=0.95,
-        threshold=1.0,
+        T=20,   # number of timesteps for rate coding
+        beta=0.95,  # membrane decay in LIF
+        threshold=1.0, # firing treshold
         dropout=0.2
     )
     model = SpikingCNN(snn_cfg).to(device)
@@ -46,6 +51,7 @@ def run_baseline():
     os.makedirs("runs", exist_ok=True)
 
     for epoch in range(1, train_cfg.epochs + 1):
+        # train_one_epoch returns loss/acc/spike statistics (spikes are a proxy for activity)
         tr = train_one_epoch(model, train_loader, optimizer, criterion, snn_cfg.T, device, train_cfg.lambda_spikes)
         va = evaluate(model, val_loader, criterion, snn_cfg.T, device)
 
@@ -61,7 +67,7 @@ def run_baseline():
                 {"model_state": model.state_dict(), "snn_cfg": snn_cfg.__dict__, "classes": class_names},
                 "runs/baseline_best.pt"
             )
-
+    # Final test evaluation using best saved checkpoint
     ckpt = torch.load("runs/baseline_best.pt", map_location=device)
     model.load_state_dict(ckpt["model_state"])
     te = evaluate(model, test_loader, criterion, snn_cfg.T, device)
@@ -82,6 +88,7 @@ def run_aco():
     )
     train_loader, val_loader, test_loader, class_names = get_dataloaders(data_cfg)
 
+    # Base config (will be copied and overridden by candidate hyperparams)
     base_snn_cfg = SNNConfig(
         num_classes=len(class_names),
         image_size=data_cfg.image_size,
@@ -103,15 +110,16 @@ def run_aco():
     aco_cfg = ACOConfig(
         n_iters=8,
         n_ants=6,
-        rho=0.2,
-        top_k=3,
-        quick_epochs=3,
+        rho=0.2,    # pheromone evaporation factor
+        top_k=3,    # reinforce top candidates each iteration
+        quick_epochs=3, # train only a few epochs per candidate
         max_train_batches=25,
         max_val_batches=15,
-        lambda_spikes=0.0,   # start with 0; later set e.g. 1e-5 to favor efficiency
+        lambda_spikes=0.0,   # if >0, fitness penalizes spikes (efficiency trade-off),
         seed=42
     )
 
+    # objective_fn(params) -> (fitness, metrics)
     objective_fn = make_objective(train_loader, val_loader, device, base_snn_cfg, aco_cfg)
 
     aco = DiscreteACO(search_space, aco_cfg)
@@ -121,9 +129,6 @@ def run_aco():
     print("fitness:", best["fitness"])
     print("params:", best["params"])
     print("metrics:", best["metrics"])
-
-import json
-import matplotlib.pyplot as plt
 
 def run_hybrid_from_aco():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -161,7 +166,7 @@ def run_hybrid_from_aco():
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
 
-    # Full training (you can increase to 20–30 later)
+    # Full training
     epochs = 12
     best_val_f1 = -1.0
     os.makedirs("runs", exist_ok=True)
@@ -197,7 +202,7 @@ def run_hybrid_from_aco():
     print(f"\n[HYBRID TEST] loss {te['loss']:.4f} acc {te['accuracy']:.3f} f1 {te['f1']:.3f} spikes {te['avg_spikes_per_sample']:.1f}")
 
 
-#### Functions after training (eval etc.) ####
+# --------- Report helpers (plots + CSV) ---------
 def plot_confusion_matrix(cm, class_names, out_path: str, title: str):
     plt.figure()
     plt.imshow(cm)
@@ -207,7 +212,7 @@ def plot_confusion_matrix(cm, class_names, out_path: str, title: str):
     plt.xticks(range(len(class_names)), class_names, rotation=30, ha="right")
     plt.yticks(range(len(class_names)), class_names)
 
-    # numbers in cells
+    # Print raw counts inside the plot cells
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
             plt.text(j, i, str(cm[i, j]), ha="center", va="center")
@@ -219,6 +224,7 @@ def plot_confusion_matrix(cm, class_names, out_path: str, title: str):
 
 
 def plot_aco_convergence(in_path="runs/aco_search.json", out_path="results/aco_convergence.png"):
+    """Plot best-per-iteration and global-best fitness over ACO iterations."""
     with open(in_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -268,7 +274,7 @@ def run_report():
 
     os.makedirs("results", exist_ok=True)
 
-    # ACO convergence
+    # ACO convergence plot (only if ACO json exists)
     if os.path.exists("runs/aco_search.json"):
         plot_aco_convergence()
 
@@ -276,7 +282,7 @@ def run_report():
     baseline_model, baseline_cfg, baseline_classes = load_model_ckpt("runs/baseline_best.pt", device)
     hybrid_model, hybrid_cfg, hybrid_classes = load_model_ckpt("runs/hybrid_best.pt", device)
 
-    # Predict test
+    # Predict labels on test set (also returns avg spikes/sample)
     from src.train import predict
     yb_true, yb_pred, yb_spikes = predict(baseline_model, test_loader, baseline_cfg.T, device)
     yh_true, yh_pred, yh_spikes = predict(hybrid_model, test_loader, hybrid_cfg.T, device)
@@ -326,8 +332,8 @@ def main():
         run_baseline()
     elif args.mode == "aco":
         run_aco()
-    elif args.mode == "report":
-        run_report()
+    elif args.mode == "hybrid":
+        run_hybrid_from_aco()
     else:
         print("Running Report.")
         run_report()

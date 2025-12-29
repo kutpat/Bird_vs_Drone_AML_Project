@@ -15,13 +15,19 @@ class TrainConfig:
     epochs: int = 10
     lr: float = 1e-3
     device: str = "cpu"
+    # for efficiency trade-off
     lambda_spikes: float = 0.0  # optional: spike penalty
 
 
 def encode_rate(x: torch.Tensor, T: int) -> torch.Tensor:
     """
-    x is normalized to [-1,1]. Convert back to [0,1] for rate coding.
-    Returns spikes [T,B,C,H,W]
+    Rate coding: convert a static image tensor into spike trains over time.
+
+    Input x is normalized to [-1, 1] (because of Normalize(0.5, 0.5)).
+    For rate coding we need probabilities in [0, 1], so we map back:
+        x01 = (x + 1) / 2
+    Then we sample spikes over T timesteps:
+        spikegen.rate(..., num_steps=T) -> [T, B, C, H, W]
     """
     x01 = (x + 1.0) / 2.0
     x01 = torch.clamp(x01, 0.0, 1.0)
@@ -38,6 +44,13 @@ def train_one_epoch(
     lambda_spikes: float = 0.0,
     max_batches: int | None = None,
 ) -> Dict[str, float]:
+    """
+        One epoch training loop.
+        - Converts each batch of images into spikes (rate coding)
+        - Runs SNN forward pass across T timesteps
+        - Computes classification loss (+ optional spike penalty)
+        - Backprop using surrogate gradients inside snnTorch
+        """
     model.train()
 
     total_loss = 0.0
@@ -46,15 +59,21 @@ def train_one_epoch(
     total_spikes = 0.0
 
     for batch_idx, (x, y) in enumerate(loader):
+        # Used in ACO quick evaluation: limit batches to speed up scoring
         if max_batches is not None and batch_idx >= max_batches:
             break
 
         x, y = x.to(device), y.to(device)
+
+        # Encode static images -> spike trains [T,B,C,H,W]
         x_spk = encode_rate(x, T=T)
 
         optimizer.zero_grad()
+
+        # Forward returns logits-like output (spike rate) + spike stats
         logits, stats = model(x_spk)
 
+        #only for the penalty
         loss = criterion(logits, y)
         if lambda_spikes > 0.0:
             loss = loss + lambda_spikes * stats["avg_spikes_per_sample"]
@@ -66,6 +85,8 @@ def train_one_epoch(
         preds = torch.argmax(logits, dim=1)
         total_correct += (preds == y).sum().item()
         total_samples += y.size(0)
+
+        # stats["total_spikes"] is total network spikes for this batch across all timesteps
         total_spikes += stats["total_spikes"].item()
 
     return {
@@ -115,6 +136,7 @@ def evaluate(
     y_true = torch.cat(all_y, dim=0).numpy()
     y_pred = torch.cat(all_pred, dim=0).numpy()
 
+    # compute_binary_metrics returns accuracy + F1 for binary classification
     m = compute_binary_metrics(y_true, y_pred)
 
     return {
@@ -134,7 +156,9 @@ def predict(
     max_batches: int | None = None,
 ):
     """
-    Returns y_true (np), y_pred (np), avg_spikes_per_sample (float)
+    Helper for report generation:
+    Runs inference and returns:
+        y_true (np array), y_pred (np array), avg_spikes_per_sample (float)
     """
     model.eval()
 

@@ -1,4 +1,9 @@
 # src/data.py
+# Data loading pipeline:
+# - loads images from data/bird and data/drone (ImageFolder)
+# - applies augmentation on train only
+# - creates a deterministic *stratified* train/val/test split
+# - returns PyTorch DataLoaders + class names
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple, List, Optional
@@ -18,11 +23,16 @@ class DataConfig:
     val_split: float = 0.15
     test_split: float = 0.15
     seed: int = 42
-    num_workers: int = 0  # set below via helper if you want
+    num_workers: int = 0
     pin_memory: bool = True
 
 
 def _build_transforms(image_size: int):
+    """
+       Train transforms include augmentation to reduce overfitting.
+       Val/Test transforms are deterministic (no augmentation).
+       Both use the same normalization as in training + Streamlit inference.
+       """
     train_tf = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.RandomHorizontalFlip(p=0.5),
@@ -48,12 +58,15 @@ def _stratified_split_indices(
 ) -> Tuple[List[int], List[int], List[int]]:
     """
     Stratified split for classification.
-    Returns train_idx, val_idx, test_idx.
+
+    We split per class so that bird/drone ratios stay similar in train/val/test.
+    Returns lists of indices: train_idx, val_idx, test_idx.
     """
     assert 0.0 <= val_split < 1.0
     assert 0.0 <= test_split < 1.0
     assert val_split + test_split < 1.0
 
+    # Torch Generator so that shuffling is reproducible
     g = torch.Generator().manual_seed(seed)
 
     targets_t = torch.tensor(targets, dtype=torch.long)
@@ -63,6 +76,8 @@ def _stratified_split_indices(
 
     for c in classes:
         idx_c = torch.where(targets_t == c)[0]
+
+        # Deterministic shuffle within this class
         perm = idx_c[torch.randperm(len(idx_c), generator=g)]
 
         n = len(perm)
@@ -87,17 +102,22 @@ def _stratified_split_indices(
 
 def get_dataloaders(cfg: DataConfig):
     """
-    Returns: train_loader, val_loader, test_loader, class_names
+    Creates datasets + stratified split + DataLoaders.
+
+    Returns:
+        train_loader, val_loader, test_loader, class_names
     """
     set_seed(cfg.seed)
 
     if cfg.num_workers == 0:
-        # good default on Windows is often 0..2; adjust if you want
+        # good default on Windows is often 0..2;
         cfg.num_workers = get_num_workers(default=2)
 
     train_tf, eval_tf = _build_transforms(cfg.image_size)
 
-    # Two datasets with different transforms but same file ordering.
+    # We create two ImageFolder datasets pointing to the same files,
+    # but with different transforms (augmented train, clean eval).
+    # ImageFolder keeps a stable file ordering, so indices match.
     ds_train = datasets.ImageFolder(root=cfg.data_dir, transform=train_tf)
     ds_eval = datasets.ImageFolder(root=cfg.data_dir, transform=eval_tf)
 
@@ -109,6 +129,7 @@ def get_dataloaders(cfg: DataConfig):
         seed=cfg.seed
     )
 
+    # Use Subset to create split datasets without copying files
     train_set = Subset(ds_train, train_idx)
     val_set = Subset(ds_eval, val_idx)
     test_set = Subset(ds_eval, test_idx)

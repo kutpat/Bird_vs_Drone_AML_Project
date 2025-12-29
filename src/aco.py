@@ -15,14 +15,25 @@ from .train import train_one_epoch, evaluate
 from .utils import set_seed
 
 
+"""
+Sampling means randomly choosing hyperparameter values, but biased by pheromone strengths so better choices are more likely.
+
+Evaporation gradually reduces pheromones so the algorithm does not get stuck in early solutions.
+
+The deposit scale controls how strongly good solutions reinforce pheromones and how fast the search converges.
+
+All of this is classic exploration adn exploitation
+"""
+
+
 @dataclass
 class ACOConfig:
     n_iters: int = 10
     n_ants: int = 8
-    rho: float = 0.2          # evaporation
+    rho: float = 0.2          # pheromone evaporation rate (higher = forget faster)
     q: float = 1.0            # pheromone deposit scale
     top_k: int = 3            # reinforce top-k ants each iter
-    alpha: float = 1.0        # pheromone exponent
+    alpha: float = 1.0        # how strongly pheromone influences sampling
     seed: int = 42
 
     # Speed controls for candidate evaluation:
@@ -31,7 +42,7 @@ class ACOConfig:
     max_val_batches: int = 20
 
     # Fitness: val_f1 - lambda_spikes * spikes
-    lambda_spikes: float = 0.0   # e.g. 1e-5 .. 1e-4 if you want spike efficiency
+    lambda_spikes: float = 0.0   # e.g. 1e-5 .. 1e-4 if we want spike penalty
 
 
 class DiscreteACO:
@@ -42,8 +53,11 @@ class DiscreteACO:
     def __init__(self, search_space: List[Tuple[str, List[Any]]], cfg: ACOConfig):
         self.search_space = search_space
         self.cfg = cfg
+
+        # local RNG for reproducible ACO sampling
         self.rng = random.Random(cfg.seed)
 
+        # Initialize pheromones uniformly (all choices equally likely at start)
         self.tau: List[List[float]] = []
         for _, vals in self.search_space:
             self.tau.append([1.0 for _ in vals])  # init pheromones
@@ -53,7 +67,7 @@ class DiscreteACO:
     def _sample_index(self, tau_row: List[float]) -> int:
         # probabilities proportional to tau^alpha
         alpha = self.cfg.alpha
-        weights = [max(1e-12, t) ** alpha for t in tau_row]
+        weights = [max(1e-12, t) ** alpha for t in tau_row] # avoid zeros
         s = sum(weights)
         r = self.rng.random() * s
         c = 0.0
@@ -64,6 +78,7 @@ class DiscreteACO:
         return len(weights) - 1
 
     def sample_params(self) -> Dict[str, Any]:
+        """Sample a full hyperparameter configuration (one choice per variable)."""
         params = {}
         for (name, vals), tau_row in zip(self.search_space, self.tau):
             j = self._sample_index(tau_row)
@@ -71,21 +86,30 @@ class DiscreteACO:
         return params
 
     def _params_to_indices(self, params: Dict[str, Any]) -> List[int]:
+        """Convert sampled params back to (choice indices) so we can update tau."""
         idxs = []
         for name, vals in self.search_space:
             idxs.append(vals.index(params[name]))
         return idxs
 
     def update_pheromones(self, ranked_solutions: List[Tuple[float, Dict[str, Any]]]):
-        # evaporate
+        """
+        Pheromone update step:
+        1) Evaporation: reduces all tau values (prevents early stagnation)
+        2) Reinforcement: add pheromone to choices used by best solutions
+        """
+
+        # 1) evaporate
         for i in range(len(self.tau)):
             for j in range(len(self.tau[i])):
                 self.tau[i][j] *= (1.0 - self.cfg.rho)
 
-        # reinforce top-k (rank-based deposit)
+        # 2) reinforce top-k (rank-based deposit)
         k = min(self.cfg.top_k, len(ranked_solutions))
         for rank in range(k):
             fitness, params = ranked_solutions[rank]
+
+            # higher rank => larger deposit
             deposit = self.cfg.q * (k - rank) / k  # simple rank-based
             idxs = self._params_to_indices(params)
             for i, j in enumerate(idxs):
@@ -97,9 +121,19 @@ class DiscreteACO:
         save_dir: str = "runs",
         save_name: str = "aco_search.json"
     ):
+        """
+           Main ACO loop:
+           for each iteration:
+             - each ant samples a config
+             - we evaluate fitness by quick training + validation
+             - update global best
+             - evaporate + reinforce pheromones
+             - save history to JSON
+        """
         os.makedirs(save_dir, exist_ok=True)
         history = []
 
+        # Cache avoids re-training the same configuration multiple times
         cache: Dict[Tuple[Tuple[str, Any], ...], Tuple[float, Dict[str, float]]] = {}
 
         for it in range(1, self.cfg.n_iters + 1):
@@ -155,13 +189,17 @@ def make_objective(
     aco_cfg: ACOConfig,
 ):
     """
-    Returns objective_fn(params) -> (fitness, metrics_dict)
-    params will override selected SNN / training hyperparams.
+    Builds and returns objective_fn(params):
+
+      params -> build SNNConfig -> quick train -> quick val -> compute fitness
+
+    Fitness is:
+      val_f1 - lambda_spikes * val_spikes
     """
     criterion = nn.CrossEntropyLoss()
 
     def objective_fn(params: Dict[str, Any]):
-        # Build model config
+        # Start from base config and override only the parameters ACO controls
         snn_cfg = SNNConfig(**base_snn_cfg.__dict__)
 
         # Override hyperparams we allow ACO to tune
@@ -176,7 +214,7 @@ def make_objective(
         model = SpikingCNN(snn_cfg).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-        # Quick train
+        # Quick train, only a few epochs + limited batches
         for _ in range(aco_cfg.quick_epochs):
             train_one_epoch(
                 model, train_loader, optimizer, criterion,
@@ -195,6 +233,7 @@ def make_objective(
         val_f1 = float(va["f1"])
         val_spikes = float(va["avg_spikes_per_sample"])
 
+        # Fitness combines performance and (optional) efficiency penalty
         fitness = val_f1 - aco_cfg.lambda_spikes * val_spikes
 
         metrics = {
